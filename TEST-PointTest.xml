@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="PointTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2025-04-21T08:49:19" hostname="bubuntu" time="0.007">
+  <properties/>
+  <testcase name="testCheckInFirstQuadrant" classname="PointTest" time="0.004"/>
+  <testcase name="testCheckDateIsSet" classname="PointTest" time="0.0"/>
+  <testcase name="testCheckInSecondQuadrant" classname="PointTest" time="0.0"/>
+  <testcase name="testCheckInThirdQuadrant" classname="PointTest" time="0.0"/>
+  <testcase name="testCheckInFourthQuadrant" classname="PointTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

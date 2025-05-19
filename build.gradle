@@ -1,0 +1,743 @@
+import org.gradle.api.tasks.testing.logging.TestExceptionFormat
+
+import javax.xml.parsers.DocumentBuilderFactory
+import java.security.MessageDigest
+import java.util.jar.JarEntry
+import java.util.jar.JarFile
+import java.util.jar.JarOutputStream
+
+plugins {
+    id 'java'
+    id 'war'
+}
+
+group = 'org.viacheslav'
+version = '1.0'
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+dependencies {
+//    implementation 'org.apache.ant:ant-jsch:1.10.13'
+//    implementation("junit:junit:4.13.2")
+    // Jakarta EE API (предоставляется сервером приложений, scope provided)
+    implementation 'jakarta.platform:jakarta.jakartaee-web-api:9.0.0'
+    // Jakarta CDI (Contexts and Dependency Injection)
+    implementation 'jakarta.enterprise:jakarta.enterprise.cdi-api:4.0.1'
+
+    // PrimeFaces
+    implementation 'org.primefaces:primefaces:14.0.6:jakarta'
+
+    // PrimeFlex
+    implementation 'org.webjars.npm:primeflex:3.3.1'
+    // PrimeIcons
+    implementation 'org.webjars.npm:primeicons:7.0.0'
+
+    // Hibernate ORM
+    implementation 'org.hibernate:hibernate-core:6.6.1.Final'
+
+    // PostgreSQL JDBC Driver
+    implementation 'org.postgresql:postgresql:42.7.4'
+    runtimeOnly 'org.postgresql:postgresql:42.7.4'
+
+    // Lombok для генерации кода
+//    implementation 'org.projectlombok:lombok:1.18.34'
+    compileOnly 'org.projectlombok:lombok:1.18.30'
+    annotationProcessor 'org.projectlombok:lombok:1.18.30'
+
+    // Тестовые зависимости с использованием JUnit 5
+    testRuntimeOnly("junit:junit:4.13.2")
+    testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.9.2")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.junit.jupiter:junit-jupiter-api:5.9.2")
+}
+
+sourceSets {
+    main {
+        java.srcDirs = ['src/main/java']
+    }
+    test {
+        java.srcDirs = ['src/test/java']
+        compileClasspath += sourceSets.main.output + configurations.testCompileClasspath
+        runtimeClasspath += sourceSets.main.output + configurations.testRuntimeClasspath
+    }
+}
+
+
+war {
+    archiveFileName = 'fse-3.war'
+    webAppDirectory = file('src/main/webapp')
+    from sourceSets.main.output.classesDirs
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    // destinationDirectory.set(file("$buildDir/classes/java/main"))
+//    classpath = sourceSets.main.compileClasspath
+}
+
+task downloadDependencies(type: Copy) {
+    from configurations.runtimeClasspath
+    into 'lib' // папка, куда копировать
+}
+
+
+sourceSets {
+    main {
+
+        resources {
+            srcDirs = ['src/main/resources']
+        }
+
+    }
+
+}
+
+// Основные свойства проекта
+ext {
+    mainClass = 'com.example.Main'
+    scpHost = 'user@example.com:/path/to/deploy'
+    envProperties = file('env.properties')
+    diffProperties = file('diff.properties')
+    replaceProperties = file('replace.properties')
+    localizationDir = file('src/main/webapp/resources')
+}
+
+
+// 1. COMPILE work
+tasks.register("mycompile") {
+    group = "build"
+    description = "Компиляция исходных кодов проекта."
+    dependsOn("classes")
+}
+
+// 2. BUILD work
+tasks.register("mybuild") {
+    group = "build"
+    description = "Сборка jar/war-файла."
+    dependsOn("mycompile", "mynative2ascii", "jar", "war")
+}
+
+// 3. CLEAN work
+tasks.register('myclean', Delete) {
+    group = 'build'
+    description = 'Удаление классов и временных файлов.'
+    delete buildDir
+}
+
+gradle.projectsEvaluated {
+    println ">>> main.java.srcDirs = ${sourceSets.main.java.srcDirs}"
+    println ">>> test.java.srcDirs = ${sourceSets.test.java.srcDirs}"
+    println ">>> test.classesDirs = ${sourceSets.test.output.classesDirs.files}"
+}
+
+// 4. TEST work
+task fullTest(type: Test) {
+    group = "verification"
+    description = "Запуск тестов после компиляции."
+
+    useJUnit()  // Используем JUnit4
+
+    reports {
+        html.required = true
+        junitXml.required = true
+        html.outputLocation = layout.buildDirectory.dir("reports/tests/fullTest")
+        junitXml.outputLocation = layout.buildDirectory.dir("test-results/fullTest")
+    }
+
+    testLogging {
+        events "started", "passed", "skipped", "failed", "standard_out", "standard_error"
+        showStandardStreams = true
+        exceptionFormat "full"
+        showExceptions = true
+        showCauses = true
+        showStackTraces = true
+    }
+
+    dependsOn 'classes'
+    dependsOn 'compileTestJava'
+}
+
+
+// 5. SPECIAL work
+tasks.register("specLaunch") {
+    group = "media"
+    description = "Сборка проекта, запуск видео или музыки в случае ошибки."
+    doLast {
+        println("Запуск `mybuild` в отдельном процессе...")
+
+        def result = exec {
+            commandLine("./gradlew", "mybuild")
+            setIgnoreExitValue(true)
+        }
+
+        if (result.exitValue == 0) {
+            println("Сборка прошла успешно, запускаем видео.")
+            exec { commandLine("xdg-open", "cringe.mp4") }
+        } else {
+            println("Сборка завершилась с ошибкой, запускаем музыку.")
+            exec { commandLine("xdg-open", "tilt.mp3") }
+        }
+    }
+
+}
+
+
+// 6. SCP work
+tasks.register("myscp") {
+    group = "custom"
+    description = "Передача по SCP после сборки."
+    dependsOn("mybuild")
+    doLast {
+        def warFile = file("build/libs/fse-3.war")
+        if (warFile.exists()) {
+            println("📤 Передача по SCP...")
+            exec { commandLine("scp", "/home/slava-linux/fse-3/build/libs/fse-3.war", "helios:/home/studs/s409331/fse-3") }
+        }
+
+    }
+}
+
+// === Конфигурационные переменные ===
+def classesDir = file("$buildDir/classes/java/main")
+
+// 7. DOC work
+task doc(dependsOn: [mybuild, javadoc]) {
+    doLast {
+        // 1. Создаем временный файл-конкатенацию всех .class файлов
+        def allClassesTemp = file("${buildDir}/all_classes.tmp")
+        allClassesTemp.withOutputStream { out ->
+            fileTree(dir: "${buildDir}/classes/java/main").each { file ->
+                if (file.name.endsWith('.class')) {
+                    out << file.bytes
+                }
+            }
+        }
+
+        // 2. Рассчитываем MD5 и SHA-1 для всех .class файлов
+        def md5Hash = digest(allClassesTemp, 'MD5')
+        def sha1Hash = digest(allClassesTemp, 'SHA-1')
+
+        // 3. Удаляем временный файл
+        allClassesTemp.delete()
+
+        // 4. Обновляем MANIFEST.MF в основном JAR-файле
+        def jarFile = tasks.named('jar').get().archiveFile.get().asFile
+
+        // Создаем временный файл для нового JAR
+        def tempJar = file("${jarFile.parent}/temp_${jarFile.name}")
+
+        // Открываем существующий JAR и копируем все, кроме старого MANIFEST.MF
+        new JarOutputStream(tempJar.newOutputStream()).withCloseable { jos ->
+            new JarFile(jarFile).withCloseable { jar ->
+                jar.entries().each { entry ->
+                    if (entry.name != 'META-INF/MANIFEST.MF') {
+                        jos.putNextEntry(new JarEntry(entry.name))
+                        jar.getInputStream(entry).withCloseable { jos << it }
+                        jos.closeEntry()
+                    }
+                }
+
+                // Добавляем новый MANIFEST с хешами
+                def manifest = new java.util.jar.Manifest()
+                manifest.mainAttributes.putValue('Manifest-Version', '1.0')
+                manifest.mainAttributes.putValue('Created-By', 'petrovviacheslav')
+                manifest.mainAttributes.putValue('Version', '1.0')
+                manifest.mainAttributes.putValue('Classes-MD5', md5Hash)
+                manifest.mainAttributes.putValue('Classes-SHA1', sha1Hash)
+
+                jos.putNextEntry(new JarEntry('META-INF/MANIFEST.MF'))
+                manifest.write(jos)
+                jos.closeEntry()
+            }
+        }
+
+        // Заменяем старый JAR новым
+        jarFile.delete()
+        tempJar.renameTo(jarFile)
+
+        // 5. Создаем отдельный JAR с javadoc
+        def javadocJar = file("${buildDir}/libs/${project.name}-javadoc.jar")
+
+        new JarOutputStream(javadocJar.newOutputStream()).withCloseable { jos ->
+            // Добавляем MANIFEST
+            def manifest = new java.util.jar.Manifest()
+            manifest.mainAttributes.putValue('Manifest-Version', '1.0')
+            manifest.mainAttributes.putValue('Created-By', 'petrovviacheslav')
+            manifest.mainAttributes.putValue('Version', '1.0')
+
+            jos.putNextEntry(new JarEntry('META-INF/MANIFEST.MF'))
+            manifest.write(jos)
+            jos.closeEntry()
+
+            // Добавляем все файлы javadoc
+            fileTree(dir: "${buildDir}/docs/javadoc").each { file ->
+                def entryName = file.path.substring("${buildDir}/docs/javadoc/".length())
+                jos.putNextEntry(new JarEntry(entryName))
+                file.withInputStream { jos << it }
+                jos.closeEntry()
+            }
+        }
+
+        println "JAR with MANIFEST (MD5: ${md5Hash}, SHA1: ${sha1Hash}) and Javadoc created!"
+    }
+}
+
+// Вспомогательная функция для расчета хешей
+static def digest(File file, String algorithm) {
+    def digest = MessageDigest.getInstance(algorithm)
+    file.eachByte(4096) { buffer, bytesRead ->
+        digest.update(buffer, 0, bytesRead)
+    }
+    digest.digest().encodeHex().toString()
+}
+
+// Настраиваем задачу javadoc
+javadoc {
+    destinationDir = file("${buildDir}/docs/javadoc")
+    options {
+        author = true
+        version = true
+        use = true
+        windowTitle = "Project API"
+    }
+}
+
+// 8. myvalidateXML work
+tasks.register('myvalidateXML') {
+    group = 'verification'
+    description = 'Валидация всех XML-файлов проекта.'
+    doLast {
+        // Получаем все XML-файлы в проекте (начиная с корневой директории)
+        def xmlFiles = fileTree(dir: 'src', include: '**/*.xml')
+
+        // Создаём фабрику для парсера XML
+        def factory = DocumentBuilderFactory.newInstance()
+        // При необходимости можно включить/отключить проверку валидности по DTD или XSD:
+        factory.setValidating(false)
+        factory.setNamespaceAware(true)
+
+        def builder = factory.newDocumentBuilder()
+
+        println "Найдено XML-файлов: ${xmlFiles.files.size()}"
+
+        xmlFiles.each { xmlFile ->
+            println "Проверяем XML-файл: ${xmlFile}"
+            try {
+                // Попытка разобрать файл. Если XML невалиден – выбросится исключение.
+                builder.parse(xmlFile)
+            } catch (Exception e) {
+                throw new GradleException("Ошибка валидации файла ${xmlFile}: ${e.message}", e)
+            }
+        }
+        println "Все XML-файлы валидны!"
+    }
+}
+
+
+// 9. mynative2ascii work
+tasks.register('mynative2ascii') {
+    group = 'build'
+    description = 'Преобразует .properties файлы из native encoding в ASCII.'
+
+    def inputDir = file('src/main/webapp/resources/resources-native')           // соответствует ${resources.dir}
+    def outputDir = file("build/resources")   // соответствует ${build.dir}/resources/resources-native
+    doLast {
+        if (!inputDir.exists()) {
+            throw new GradleException("Входная директория не найдена: $inputDir")
+        }
+
+        // Создаём выходную директорию
+        outputDir.mkdirs()
+
+        inputDir.eachFileRecurse { file ->
+            if (file.name.endsWith('.properties')) {
+                def relativePath = inputDir.toPath().relativize(file.toPath()).toString()
+                def outputFile = new File(outputDir, relativePath)
+
+                // Создаём директорию, если надо
+                outputFile.parentFile.mkdirs()
+
+                // Загружаем .properties в память
+                def props = new Properties()
+                file.withReader('UTF-8') { reader ->
+                    props.load(reader)
+                }
+
+                // Сохраняем в формате native2ascii
+                outputFile.withWriter('ASCII') { writer ->
+                    props.store(writer, null)
+                }
+
+                println "Преобразован: ${file} -> ${outputFile}"
+            }
+        }
+    }
+}
+
+// 10. myreport work
+task myreport(dependsOn: fullTest) {
+    doLast {
+        copy {
+            from file('build/test-results/fullTest/TEST-PointTest.xml')
+            into file('.')
+        }
+        def testResults = file("TEST-PointTest.xml")
+        if (testResults.exists()) {
+            println "дщд"
+            exec { commandLine('svn', 'add', "${testResults}", "--force") }
+            exec { commandLine('svn', 'commit', "-m", "'Adding test report'") }
+        }
+    }
+}
+
+// 11. work!!!!
+task myenv(dependsOn: mycompile) {
+    group = 'env'
+    description = 'Сборка и запуск программы в альтернативной среде'
+
+    def srcDir = file("src/main/java")
+    def buildOutput = file("build/libs/fse-3.war") // или другой итоговый файл
+    def scpDir = file("/home/slava-linux/wildfly-34.0.0.Final/standalone/deployments")
+    def envScript = file("/home/slava-linux/wildfly-34.0.0.Final/bin/standalone.sh") // путь до скрипта запуска
+
+    inputs.dir(srcDir)
+    outputs.dir(classesDir)
+
+    doLast {
+        // Убедиться, что директория для классов существует
+        classesDir.mkdirs()
+
+        exec { commandLine("./gradlew", "mynative2ascii") }
+        // exec { commandLine("./gradlew", "jar") }
+        exec { commandLine("./gradlew", "war") }
+
+        // Копируем результат сборки в другую папку
+        copy {
+            from buildOutput
+            into scpDir
+        }
+
+        // Запуск скрипта среды
+        if (!envScript.exists()) {
+            throw new GradleException("Скрипт окружения не найден: $envScript")
+        }
+
+        exec {
+            executable = envScript.absolutePath
+        }
+    }
+}
+
+
+//// 12. diff work
+task diff {
+    group = "version control"
+    description = "Проверяет изменения в SVN и коммитит, если изменённые файлы допустимы."
+
+    def allowedChangesFile = file("allowed-classes.txt") // список разрешённых путей/классов
+
+    doLast {
+        def allowedPatterns = allowedChangesFile.readLines().findAll { it?.trim() }
+
+        def statusOutput = new ByteArrayOutputStream()
+        exec {
+            commandLine "svn", "status"
+            standardOutput = statusOutput
+        }
+
+        def modifiedFiles = statusOutput.toString("UTF-8").readLines()
+                .findAll { it.startsWith("M ") || it.startsWith("A ") || it.startsWith("D ") }
+                .collect { it.substring(2).trim() }
+
+        def forbidden = modifiedFiles.findAll { filePath ->
+            !allowedPatterns.any { pattern -> filePath.contains(pattern) }
+        }
+
+        if (forbidden.isEmpty()) {
+            println "⚠️ Найдены изменения в неразрешённых файлах:"
+            forbidden.each { println " - $it" }
+            throw new GradleException("Изменения содержат запрещённые классы. Коммит отменён.")
+        }
+
+        // Коммитим разрешённые изменения
+        exec {
+            commandLine "svn", "commit", "-m", "Автоматический коммит разрешённых изменений"
+        }
+
+        println "✅ Коммит выполнен."
+    }
+}
+
+
+//// Цель team
+//task team(dependsOn: build) {
+//    doLast {
+//        def revisions = []
+//        "svn log -l 3".execute().text.eachLine { line ->
+//            def matcher = line =~ /^r(\d+)/
+//            if (matcher) {
+//                revisions << matcher[0][1]
+//            }
+//        }
+//
+//        revisions.each { rev ->
+//            "svn up -r ${rev}".execute().waitFor()
+//            tasks.build.execute()
+//            ant.zip(destfile: "build/revision-${rev}.zip") {
+//                fileset(dir: 'build/libs') {
+//                    include(name: '*.jar')
+//                }
+//            }
+//        }
+//    }
+//}
+//
+//// Цель history
+//task history {
+//    doLast {
+//        def currentRev = "svn info".execute().text.readLines().find { it.startsWith('Revision:') }?.split(':')?.last()?.trim()
+//        def workingRev = null
+//
+//        while (currentRev) {
+//            try {
+//                "svn up -r ${currentRev}".execute().waitFor()
+//                tasks.compile.execute()
+//                workingRev = currentRev
+//                break
+//            } catch (e) {
+//                currentRev = currentRev.toInteger() - 1
+//                if (currentRev <= 0) break
+//            }
+//        }
+//
+//        if (workingRev) {
+//            def nextRev = workingRev.toInteger() + 1
+//            def diffFile = file("build/diff-${nextRev}.patch")
+//            diffFile.parentFile.mkdirs()
+//            "svn diff -r ${workingRev}:${nextRev} > ${diffFile}".execute().waitFor()
+//        }
+//    }
+//}
+//
+
+def altDir = file("${buildDir}/alt-src")
+sourceSets {
+    alt {
+        java {
+            srcDirs = ['build/alt-src']
+//            outputDir = file('build/classes/java/main') // Куда компилировать
+        }
+    }
+}
+
+task compileAltJava2(type: JavaCompile) {
+    source = sourceSets.alt.java
+    destinationDirectory = file('build/classes/java/main')
+    classpath = sourceSets.main.compileClasspath // Используем основной classpath
+
+    options.encoding = 'UTF-8'
+    options.compilerArgs += ['-parameters']
+}
+
+//// Цель alt work
+task alt {
+    group = 'build'
+    description = 'Создает альтернативную версию программы с измененными именами'
+
+    def replacements = [
+            'org.viacheslav.Point': 'org.viacheslav.AltPoint',
+            'point'               : 'altpoint',
+            'Point'               : 'AltPoint'
+    ]
+
+    doLast {
+        def srcDir = file("${projectDir}/src/main/java")
+
+
+        // 1. Копируем исходники во временную директорию
+        copy {
+            from srcDir
+            into altDir
+            include '**/*.java'
+        }
+
+        // 2. Применяем замены во всех Java-файлах
+        fileTree(altDir).include('**/*.java').each { file ->
+            def content = file.text
+            replacements.each { oldStr, newStr ->
+                content = content.replaceAll(oldStr, newStr)
+            }
+            file.text = content
+        }
+
+        def sourceFile = file("${altDir}/org/viacheslav/Point.java")
+        def destFile = file("${altDir}/org/viacheslav/AltPoint.java")
+
+        // Перезапись содержимого
+        destFile.text = sourceFile.text
+
+        sourceFile.delete()
+
+        // 5. Запускаем сборку альтернативного JAR
+
+        exec { commandLine('./gradlew', 'compileAltJava2') }
+        exec { commandLine('jar', 'cfm', "${buildDir}/libs/alt.jar", "${buildDir}/tmp/jar/MANIFEST.MF", '-C', "${buildDir}/classes/java/main", '.') }
+
+//        exec { commandLine('./gradlew', 'jar') }
+
+        println "Альтернативная версия собрана: ${buildDir}/libs/alt.jar"
+    }
+}
+
+
+
+import java.nio.file.Files
+import java.text.SimpleDateFormat
+
+task team {
+    group = "version control"
+    description = "Получает 3 предыдущих ревизии из SVN, собирает их и архивирует jar-файлы."
+    def revisionsToFetch = 3
+    def baseDir = file("$buildDir/team")
+    def zipOutput = file("$buildDir/team-artifacts.zip")
+    doLast {
+        baseDir.mkdirs()
+        def out = new ByteArrayOutputStream()
+        exec {
+            commandLine "svn", "info", "-r", "HEAD"
+            standardOutput = out
+        }
+
+        def currentRev = out.toString().readLines().find { it.startsWith("Revision:") }?.split(":")?.last()?.trim()?.toInteger()
+        println "📌 Текущая ревизия SVN: $currentRev"
+
+        def warFiles = []
+
+        (1..revisionsToFetch).each { i ->
+            def rev = currentRev - i
+            def dir = new File(baseDir, "rev-$rev")
+            println "⬇️ Получение ревизии $rev в $dir"
+
+            exec {
+                commandLine "svn", "export", "-r", "$rev", "file:///home/slava-linux/fse-3/repo/trunk", "build/team/rev-$rev"
+            }
+
+
+            println "🔨 Сборка ревизии $rev"
+            exec {
+                workingDir = dir
+                commandLine "./gradlew", "clean", "build", "--no-daemon"
+            }
+
+            // Ищем WAR
+            def war = new File(dir, "build/libs")
+                    .listFiles()
+                    ?.find { it.name.endsWith(".war") && !it.name.endsWith("-sources.war") }
+
+            if (war) {
+                def renamed = new File(baseDir, "rev-${rev}-${war.name}")
+                Files.copy(war.toPath(), renamed.toPath())
+                warFiles << renamed
+                println "📦 JAR добавлен: ${renamed.name}"
+            } else {
+                println "⚠️ JAR не найден в ревизии $rev"
+            }
+        }
+
+        println "📚 Архивация WAR-файлов в ${zipOutput.name}"
+        ant.zip(destfile: zipOutput) {
+            warFiles.each { file ->
+                fileset(file: file)
+            }
+        }
+
+        println "✅ Архив создан: ${zipOutput.absolutePath}"
+    }
+}
+
+
+import java.nio.file.Files
+import java.text.SimpleDateFormat
+
+task history {
+    group = "version control"
+    description = "Находит последнюю компилируемую ревизию и создаёт diff следующей."
+
+    def tempDir = file("$buildDir/history")
+    def diffFile = file("$buildDir/history-diff.txt")
+
+    doLast {
+        tempDir.mkdirs()
+
+        // Получаем последнюю ревизию
+        def revOut = new ByteArrayOutputStream()
+        exec {
+            commandLine "svn", "info", "-r", "HEAD", "--show-item", "revision"
+            standardOutput = revOut
+        }
+        def headRev = revOut.toString().trim().toInteger()
+        println "🔍 HEAD ревизия: $headRev"
+
+        def workingRev = null
+
+        // Начинаем с HEAD и двигаемся назад
+        for (rev in headRev..1) {
+            println "⏪ Проверка ревизии $rev..."
+
+            def revDir = new File(tempDir, "rev-$rev")
+            if (revDir.exists()) revDir.deleteDir()
+
+
+            exec {
+                commandLine "svn", "checkout", "-r", "$rev", "file:///home/slava-linux/fse-3/repo/trunk", "build/team/rev-$rev"
+            }
+
+            def result = exec {
+                // workingDir = revDir
+                commandLine ("./gradlew", "mycompile")
+                ignoreExitValue = true
+            }
+
+            if (result.exitValue == 0) {
+                println "✅ Ревизия $rev успешно компилируется"
+                workingRev = rev
+                break
+            } else {
+                println "❌ Ревизия $rev не собирается"
+            }
+        }
+
+        if (workingRev == null) {
+            println "🛑 Ни одна ревизия не компилируется"
+            return
+        }
+
+        if (workingRev == headRev) {
+            println "🎉 Текущая HEAD ревизия уже рабочая. Diff не нужен."
+            return
+        }
+
+        def nextRev = workingRev + 1
+
+        println "📄 Создание diff между ревизией $workingRev и $nextRev..."
+
+        def diffOut = new ByteArrayOutputStream()
+        exec {
+            commandLine "svn", "diff", "-r", "$workingRev:$nextRev"
+            standardOutput = diffOut
+        }
+
+        diffFile.text = diffOut.toString("UTF-8")
+        println "📝 Diff сохранён в: ${diffFile.absolutePath}"
+    }
+}
